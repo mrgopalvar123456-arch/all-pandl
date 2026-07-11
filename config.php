@@ -9,6 +9,32 @@ define('OWNER_ID', 7940416120);
 define('BOT_USERNAME', '𝗫𝗣𝗔𝗡𝗡𝗘𝗜 𝗕𝗢𝗧');
 define('DB_FILE', 'bot_data.json');
 
+// স্ট্যান্ডার্ড ইমোজি ম্যাপ (প্রিমিয়াম ইমোজি কোড রিমুভড)
+$EM = [
+    'ok' => '✅',
+    'no' => '❌',
+    'warn' => '⚠️',
+    'admin' => '📊',
+    'user' => '👤',
+    'file' => '📁',
+    'rocket' => '🚀',
+    'graph' => '📊',
+    'money' => '💸',
+    'gift' => '🎁',
+    'msg' => '💬',
+    'gear' => '⚙️',
+    'link' => '🔗',
+    'trash' => '🗑',
+    'upload' => '📤',
+    'world' => '🌐',
+    'lock' => '🔐',
+    'phone' => '📱',
+    'num' => '🔢',
+    'pin' => '📍',
+    'star' => '✨',
+    'hi' => '👋'
+];
+
 // ডিফল্ট সেটিংস (Stex, Voltx, Zenex, Premium Emoji, User Management ও 100 Bulk সম্পূর্ণ রিমুভড)
 $default_settings = [
     'admins' => [5409553122, OWNER_ID],
@@ -45,7 +71,7 @@ $default_settings = [
     ]
 ];
 
-// ডাটাবেস লোডার ও সেভার (Thread-safe flock সহ)
+// ডাটাবেস লোডার (নিরাপদ সংস্করণ)
 function load_db() {
     global $default_settings;
     if (!file_exists(DB_FILE)) {
@@ -62,24 +88,63 @@ function load_db() {
             'recent_traffic' => [],
             'processed_otps' => []
         ];
-        file_put_contents(DB_FILE, json_encode($initial_db, JSON_PRETTY_PRINT));
+        @file_put_contents(DB_FILE, json_encode($initial_db, JSON_PRETTY_PRINT));
     }
-    $file = fopen(DB_FILE, 'r');
+    
+    $file = @fopen(DB_FILE, 'r');
+    if (!$file) {
+        // ফাইল ওপেন করতে ব্যর্থ হলে ডিফল্ট স্ট্রাকচার ব্যাকআপ হিসেবে রিটার্ন করবে
+        return [
+            'bot_settings' => $default_settings,
+            'number_batches' => [],
+            'used_numbers_list' => [],
+            'user_data' => [],
+            'user_states' => [],
+            'temp_data' => [],
+            'user_active_sessions' => [],
+            'pending_withdrawals' => [],
+            'support_msg_map' => [],
+            'recent_traffic' => [],
+            'processed_otps' => []
+        ];
+    }
+    
     flock($file, LOCK_SH);
     $size = filesize(DB_FILE);
     $content = $size > 0 ? fread($file, $size) : '{}';
+    flock($file, LOCK_UN);
     fclose($file);
-    return json_decode($content, true) ?: [];
+    
+    $data = json_decode($content, true);
+    if (!$data || !isset($data['bot_settings'])) {
+        return [
+            'bot_settings' => $default_settings,
+            'number_batches' => [],
+            'used_numbers_list' => [],
+            'user_data' => [],
+            'user_states' => [],
+            'temp_data' => [],
+            'user_active_sessions' => [],
+            'pending_withdrawals' => [],
+            'support_msg_map' => [],
+            'recent_traffic' => [],
+            'processed_otps' => []
+        ];
+    }
+    return $data;
 }
 
+// ডাটাবেস সেভার (নিরাপদ সংস্করণ)
 function save_db($data) {
-    $file = fopen(DB_FILE, 'w');
-    if (flock($file, LOCK_EX)) {
-        fwrite($file, json_encode($data, JSON_PRETTY_PRINT));
-        fflush($file);
-        flock($file, LOCK_UN);
+    $file = @fopen(DB_FILE, 'w');
+    if ($file) {
+        if (flock($file, LOCK_EX)) {
+            fwrite($file, json_encode($data, JSON_PRETTY_PRINT));
+            fflush($file);
+            flock($file, LOCK_UN);
+        }
+        fclose($file);
     }
-    fclose($file);
 }
 
 // Telegram API ফাংশনসমূহ
@@ -90,6 +155,7 @@ function api_call($method, $payload = []) {
     curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
     curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
     curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
     $res = curl_exec($ch);
     curl_close($ch);
     return json_decode($res, true) ?: [];
@@ -133,6 +199,7 @@ function send_document($chat_id, $filename, $content) {
         "Content-Type: multipart/form-data; boundary=" . $boundary,
         "Content-Length: " . strlen($post_data)
     ]);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
     curl_exec($ch);
     curl_close($ch);
 }
