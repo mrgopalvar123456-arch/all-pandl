@@ -3,7 +3,7 @@
 // File: config.php (Core Configurations & Helpers)
 // ==========================================
 
-define('TOKEN', '8312212025:AAGQVy_EzFkFqlcqsSsi8r4yPDAQw_01dFw');
+define('TOKEN', '8312212025:AAGQVy_EzFkFqlcsi8r4yPDAQw_01dFw');
 define('BASE_URL', 'https://api.telegram.org/bot' . TOKEN);
 define('OWNER_ID', 7940416120);
 define('BOT_USERNAME', '𝗫𝗣𝗔𝗡𝗡𝗘𝗜 𝗕𝗢𝗧');
