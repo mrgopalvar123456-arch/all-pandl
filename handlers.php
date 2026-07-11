@@ -1,6 +1,6 @@
 <?php
 // ==========================================
-// File: handlers.php (Bot Menus, Keyboards & Routers)
+// File: handlers.php (Fully Integrated Bot Menus, Keyboards & Routers)
 // ==========================================
 
 require_once 'config.php';
@@ -86,7 +86,6 @@ function admin_settings_keyboard($settings) {
     return ['inline_keyboard' => $kb];
 }
 
-// ওটিপি গ্রুপ ম্যানেজমেন্ট কিবোর্ড
 function otp_groups_list_keyboard($settings) {
     $kb = [
         [['text' => "Edit OTP Button Link", 'callback_data' => 'edit_otp_link']],
@@ -112,7 +111,6 @@ function specific_fw_group_keyboard($settings, $idx) {
     return ['inline_keyboard' => $kb];
 }
 
-// প্রোভাইডার সেটিংস কিবোর্ড
 function typed_panels_list_keyboard($panels, $p_type) {
     $kb = [];
     foreach ($panels as $idx => $p) {
@@ -138,6 +136,11 @@ function panel_config_keyboard($panels, $idx) {
         $kb[] = [['text' => 'Set API URL', 'callback_data' => "set_p_api_$idx"]];
         $kb[] = [['text' => 'Set Token', 'callback_data' => "set_p_tok_$idx"]];
         $kb[] = [['text' => 'Full API (URL+Token)', 'callback_data' => "set_p_fapi_$idx"]];
+    } else {
+        $kb[] = [['text' => 'Set Login URL', 'callback_data' => "set_p_lurl_$idx"]];
+        $kb[] = [['text' => 'Set Username', 'callback_data' => "set_p_user_$idx"]];
+        $kb[] = [['text' => 'Set Password', 'callback_data' => "set_p_pass_$idx"]];
+        $kb[] = [['text' => 'Set Message Link', 'callback_data' => "set_p_mlink_$idx"]];
     }
     $kb[] = [['text' => 'Test Connection', 'callback_data' => "test_p_conn_$idx"]];
     $back_data = ($p['type'] ?? 'API Panel') === 'API Panel' ? 'manage_api_panels' : 'manage_cpt_panels';
@@ -159,7 +162,7 @@ function get_admin_text($db_data) {
          . "🚀 Available  » $available_nums\n";
 }
 
-// মেসেজ রাউটার (ট্যাক্সট হ্যান্ডলার)
+// মেসেজ রাউটার
 function handle_message($message, &$db_data) {
     $chat_id = $message['chat']['id'];
     $text = isset($message['text']) ? trim($message['text']) : '';
@@ -178,6 +181,30 @@ function handle_message($message, &$db_data) {
     $user = &$db_data['user_data'][$chat_id];
     if ($user['banned']) {
         send_message($chat_id, "❌ You are banned from this bot.");
+        return;
+    }
+
+    // ফাইল আপলোড প্রোসেসিং (লোকাল স্টক যুক্তকরণ)
+    if (isset($message['document'])) {
+        $doc = $message['document'];
+        if (str_ends_with(strtolower($doc['file_name']), '.txt')) {
+            $file_id = $doc['file_id'];
+            $file_info = api_call('getFile', ['file_id' => $file_id]);
+            if (isset($file_info['result']['file_path'])) {
+                $file_path = $file_info['result']['file_path'];
+                $content = file_get_contents("https://api.telegram.org/file/bot" . TOKEN . "/" . $file_path);
+                
+                $db_data['temp_data'][$chat_id] = [
+                    'numbers' => explode("\n", str_replace("\r", "", $content)),
+                    'filename' => $doc['file_name']
+                ];
+                $db_data['user_states'][$chat_id] = 'wait_for_service';
+                send_message($chat_id, "✅ File received.\n\n📌 Enter the service name (e.g., WHATSAPP):");
+                return;
+            }
+        } else {
+            send_message($chat_id, "❌ Please upload a .txt file only.");
+        }
         return;
     }
 
@@ -203,7 +230,7 @@ function handle_message($message, &$db_data) {
         }
     }
 
-    // রেফারেল ডাটাবেস প্রোসেস
+    // রেফারেল প্রোসেস
     if (str_starts_with($text, '/start ')) {
         $ref_by = (int)substr($text, 7);
         if ($ref_by !== $chat_id && isset($db_data['user_data'][$ref_by]) && !isset($user['referred_by'])) {
@@ -225,7 +252,6 @@ function handle_message($message, &$db_data) {
             $query = preg_replace('/\D/', '', $text);
             $found_numbers = [];
             
-            // লোকাল আপলোডেড স্টক ফাইলের ব্যাচ থেকে খোঁজা
             foreach ($db_data['number_batches'] as $bid => &$batch) {
                 foreach ($batch['numbers'] as $n_idx => $n_obj) {
                     $clean_num = str_replace('+', '', $n_obj['num']);
@@ -253,7 +279,6 @@ function handle_message($message, &$db_data) {
                         unset($db_data['number_batches'][$bid]['numbers'][$n_idx]);
                     }
                 }
-                // ফাঁকা ইনডেক্স ঠিক করা
                 foreach ($db_data['number_batches'] as $bid => &$batch) {
                     $batch['numbers'] = array_values($batch['numbers']);
                 }
@@ -268,12 +293,88 @@ function handle_message($message, &$db_data) {
                     ]
                 ]);
             } else {
-                send_message($chat_id, "❌ No numbers available in local stock starting with prefix '$query'.");
+                send_message($chat_id, "❌ No numbers available starting with '$query'.");
             }
             return;
         }
 
-        // লাইভ সাপোর্ট এডমিন ইনপুট
+        // লোকাল ফাইল প্রোসেসিং স্টেটসমুহ
+        if ($state === 'wait_for_service' && !empty($text)) {
+            $db_data['temp_data'][$chat_id]['service'] = strtoupper($text);
+            $db_data['user_states'][$chat_id] = 'wait_for_country';
+            send_message($chat_id, "🌍 Enter the country name (e.g., BANGLADESH):");
+            return;
+        }
+
+        if ($state === 'wait_for_country' && !empty($text)) {
+            unset($db_data['user_states'][$chat_id]);
+            $country = strtoupper($text);
+            $service = $db_data['temp_data'][$chat_id]['service'];
+            $raw_numbers = $db_data['temp_data'][$chat_id]['numbers'];
+            $filename = $db_data['temp_data'][$chat_id]['filename'];
+            unset($db_data['temp_data'][$chat_id]);
+            
+            $clean_nums = [];
+            foreach ($raw_numbers as $num) {
+                $num = trim($num);
+                if (!empty($num)) {
+                    if (!str_starts_with($num, '+')) $num = '+' . $num;
+                    $clean_nums[] = ['num' => $num, 'shares' => 0, 'used_by' => []];
+                }
+            }
+            
+            $batch_id = uniqid();
+            $db_data['number_batches'][$batch_id] = [
+                'filename' => $filename,
+                'service' => $service,
+                'country' => $country,
+                'numbers' => $clean_nums
+            ];
+            
+            send_message($chat_id, "✅ Successfully added " . count($clean_nums) . " numbers for $service ($country)!");
+            return;
+        }
+
+        // অ্যাডমিন প্যানেল ক্রিয়েটর ও কনফিগ স্টেট হ্যান্ডলিং
+        if ($state === 'wait_for_panel_name' && !empty($text)) {
+            unset($db_data['user_states'][$chat_id]);
+            $type = $db_data['temp_data'][$chat_id]['add_type'] === 'api' ? 'API Panel' : 'Auto Captcha Panel';
+            unset($db_data['temp_data'][$chat_id]);
+            
+            $settings['panels'][] = [
+                'name' => $text,
+                'type' => $type,
+                'status' => 'OFF',
+                'api_url' => '',
+                'token' => '',
+                'login_url' => '',
+                'username' => '',
+                'password' => '',
+                'msg_link' => '',
+                'login_status' => '⏳ Pending Setup'
+            ];
+            send_message($chat_id, "✅ Provider '$text' added. Configure it from Panel Management.", main_menu($chat_id, $settings['admins']));
+            return;
+        }
+
+        if (in_array($state, ['wait_for_p_api', 'wait_for_p_tok', 'wait_for_p_fapi', 'wait_for_p_lurl', 'wait_for_p_user', 'wait_for_p_pass', 'wait_for_p_mlink']) && !empty($text)) {
+            unset($db_data['user_states'][$chat_id]);
+            $idx = $db_data['temp_data'][$chat_id]['p_idx'];
+            unset($db_data['temp_data'][$chat_id]);
+            
+            if ($state === 'wait_for_p_api') $settings['panels'][$idx]['api_url'] = $text;
+            elseif ($state === 'wait_for_p_tok') $settings['panels'][$idx]['token'] = $text;
+            elseif ($state === 'wait_for_p_fapi') $settings['panels'][$idx]['full_api_url'] = $text;
+            elseif ($state === 'wait_for_p_lurl') $settings['panels'][$idx]['login_url'] = $text;
+            elseif ($state === 'wait_for_p_user') $settings['panels'][$idx]['username'] = $text;
+            elseif ($state === 'wait_for_p_pass') $settings['panels'][$idx]['password'] = $text;
+            elseif ($state === 'wait_for_p_mlink') $settings['panels'][$idx]['msg_link'] = $text;
+
+            send_message($chat_id, "✅ Setting updated successfully.");
+            return;
+        }
+
+        // লাইভ সাপোর্ট ও সাপোর্ট রিপ্লাই হ্যান্ডলার
         if ($state === 'wait_for_support_msg' && !empty($text)) {
             unset($db_data['user_states'][$chat_id]);
             $admin_msg = "💬 <b>Live Support Message</b>\n\n"
@@ -284,20 +385,20 @@ function handle_message($message, &$db_data) {
             foreach ($settings['admins'] as $adm) {
                 send_message($adm, $admin_msg, $reply_btn);
             }
-            send_message($chat_id, "✅ Your message has been sent to the admin. Please wait for a reply!");
+            send_message($chat_id, "✅ Message sent to admin. Please wait for a reply!");
             return;
         }
 
-        // এডমিন রিপ্লাই হ্যান্ডলার
         if ($state === 'wait_for_admin_reply' && !empty($text)) {
             unset($db_data['user_states'][$chat_id]);
             $target = $db_data['temp_data'][$chat_id]['target_user'];
+            unset($db_data['temp_data'][$chat_id]);
             send_message($target, "💬 <b>Admin Reply:</b>\n\n$text");
             send_message($chat_id, "✅ Reply sent successfully!");
             return;
         }
         
-        // উইথড্র অ্যামাউন্ট ইনপুট
+        // উইথড্র অ্যামাউন্ট এবং নাম্বার ইনপুট
         if ($state === 'wait_for_withdraw_amt' && !empty($text)) {
             $amt = floatval($text);
             $min_w = floatval($settings['min_withdraw']);
@@ -311,7 +412,6 @@ function handle_message($message, &$db_data) {
             return;
         }
 
-        // উইথড্র নাম্বার ইনপুট
         if ($state === 'wait_for_withdraw_num' && !empty($text)) {
             unset($db_data['user_states'][$chat_id]);
             $amt = $db_data['temp_data'][$chat_id]['w_amt'];
@@ -350,9 +450,45 @@ function handle_message($message, &$db_data) {
             send_message($chat_id, "✅ Withdrawal Request sent. ID: <code>$req_id</code>");
             return;
         }
+
+        // ওটিপি গ্রুপ সেটিংস আপডেটারস
+        if (in_array($state, ['wait_for_add_fw_id', 'wait_for_otp_link', 'wait_for_main_channel', 'wait_for_menu_text']) && !empty($text)) {
+            unset($db_data['user_states'][$chat_id]);
+            if ($state === 'wait_for_add_fw_id') {
+                $settings['fw_groups'][] = ['chat_id' => $text, 'buttons' => []];
+                send_message($chat_id, "✅ Forward group added.");
+            } elseif ($state === 'wait_for_otp_link') {
+                $settings['otp_link'] = $text;
+                send_message($chat_id, "✅ OTP Group Link updated.");
+            } elseif ($state === 'wait_for_main_channel') {
+                $settings['main_channel'] = $text;
+                send_message($chat_id, "✅ Main Channel Link updated.");
+            } elseif ($state === 'wait_for_menu_text') {
+                $key = $db_data['temp_data'][$chat_id]['menu_key'];
+                unset($db_data['temp_data'][$chat_id]);
+                $settings['custom_messages'][$key]['text'] = $text;
+                send_message($chat_id, "✅ Menu text updated.");
+            }
+            return;
+        }
+
+        if ($state === 'wait_for_add_fw_btn' && !empty($text)) {
+            unset($db_data['user_states'][$chat_id]);
+            $idx = $db_data['temp_data'][$chat_id]['fw_idx'];
+            unset($db_data['temp_data'][$chat_id]);
+            
+            $parts = explode('-', $text, 2);
+            if (count($parts) === 2) {
+                $settings['fw_groups'][$idx]['buttons'][] = ['text' => trim($parts[0]), 'url' => trim($parts[1])];
+                send_message($chat_id, "✅ Custom button added.");
+            } else {
+                send_message($chat_id, "❌ Invalid format. Use: Button Text - https://link.com");
+            }
+            return;
+        }
     }
 
-    // সাধারণ মেনু কমান্ডসমূহ
+    // মেনু কমান্ডসমূহ
     if ($text === '/start') {
         $msg = $settings['custom_messages']['start']['text'];
         send_message($chat_id, $msg, main_menu($chat_id, $settings['admins']));
@@ -405,7 +541,7 @@ function handle_message($message, &$db_data) {
     }
 }
 
-// বাটন ক্লিক (Callback Queries) রাউটার
+// বাটন ক্লিক রাউটার (Callback Queries)
 function handle_callback($call, &$db_data) {
     $chat_id = $call['message']['chat']['id'];
     $data = $call['data'];
@@ -413,7 +549,7 @@ function handle_callback($call, &$db_data) {
     $settings = &$db_data['bot_settings'];
 
     if ($data === 'close_msg') {
-        delete_message($chat_id, msg_id);
+        delete_message($chat_id, $msg_id);
     } 
     elseif ($data === 'cancel_state') {
         unset($db_data['user_states'][$chat_id]);
@@ -492,10 +628,139 @@ function handle_callback($call, &$db_data) {
         $req_id = str_replace('wrej_', '', $data);
         if (isset($db_data['pending_withdrawals'][$req_id])) {
             $req = $db_data['pending_withdrawals'][$req_id];
-            $db_data['user_data'][$req['user_id']]['balance'] += $req['amount']; // রিফান্ড
+            $db_data['user_data'][$req['user_id']]['balance'] += $req['amount'];
             send_message($req['user_id'], "❌ Your withdrawal request for {$req['amount']} TK has been <b>REJECTED</b> and refunded.");
             unset($db_data['pending_withdrawals'][$req_id]);
             edit_message($chat_id, $msg_id, "❌ Withdrawal Rejected.");
         }
+    }
+    
+    // ==========================================
+    // প্যানেল ম্যানেজমেন্ট ব্যাকএন্ড রাউটিং (নতুন যুক্তকৃত)
+    // ==========================================
+    elseif ($data === 'manage_panels') {
+        $api_count = 0; $cpt_count = 0;
+        foreach ($settings['panels'] as $p) {
+            if (($p['type'] ?? 'API Panel') === 'API Panel') $api_count++;
+            else $cpt_count++;
+        }
+        $kb = ['inline_keyboard' => [
+            [['text' => "Manage API Panels ($api_count)", 'callback_data' => 'manage_api_panels']],
+            [['text' => "Manage Auto Captcha Panels ($cpt_count)", 'callback_data' => 'manage_cpt_panels']],
+            [['text' => 'Back to System', 'callback_data' => 'system_settings']]
+        ]];
+        edit_message($chat_id, $msg_id, "⚙️ <b>Panel Management</b>\nSelect which type of panel system you want to manage:", $kb);
+    }
+    elseif ($data === 'manage_api_panels' || $data === 'manage_cpt_panels') {
+        $p_type = ($data === 'manage_api_panels') ? 'API Panel' : 'Auto Captcha Panel';
+        edit_message($chat_id, $msg_id, "⚙️ <b>Manage $p_type Providers</b>", typed_panels_list_keyboard($settings['panels'], $p_type));
+    }
+    elseif ($data === 'add_api_panel' || $data === 'add_cpt_panel') {
+        $p_type = ($data === 'add_api_panel') ? 'api' : 'logc';
+        $db_data['user_states'][$chat_id] = 'wait_for_panel_name';
+        $db_data['temp_data'][$chat_id] = ['add_type' => $p_type];
+        edit_message($chat_id, $msg_id, "📝 Enter the name of the new provider:", ['inline_keyboard' => [[['text' => 'Cancel', 'callback_data' => 'manage_panels']]]]);
+    }
+    elseif (str_starts_with($data, 'conf_pnl_')) {
+        $idx = (int)str_replace('conf_pnl_', '', $data);
+        edit_message($chat_id, $msg_id, "⚙️ <b>Configure: {$settings['panels'][$idx]['name']}</b>", panel_config_keyboard($settings['panels'], $idx));
+    }
+    elseif (str_starts_with($data, 'tog_pnl_')) {
+        $idx = (int)str_replace('tog_pnl_', '', $data);
+        $settings['panels'][$idx]['status'] = ($settings['panels'][$idx]['status'] === 'ON') ? 'OFF' : 'ON';
+        edit_message($chat_id, $msg_id, "⚙️ <b>Configure: {$settings['panels'][$idx]['name']}</b>", panel_config_keyboard($settings['panels'], $idx));
+    }
+    elseif (str_starts_with($data, 'set_p_api_') || str_starts_with($data, 'set_p_tok_') || str_starts_with($data, 'set_p_fapi_') || str_starts_with($data, 'set_p_lurl_') || str_starts_with($data, 'set_p_user_') || str_starts_with($data, 'set_p_pass_') || str_starts_with($data, 'set_p_mlink_')) {
+        $parts = explode('_', $data);
+        $idx = (int)end($parts);
+        $key = implode('_', array_slice($parts, 0, -1));
+        
+        $state_map = [
+            'set_p_api' => 'wait_for_p_api', 'set_p_tok' => 'wait_for_p_tok', 'set_p_fapi' => 'wait_for_p_fapi',
+            'set_p_lurl' => 'wait_for_p_lurl', 'set_p_user' => 'wait_for_p_user', 'set_p_pass' => 'wait_for_p_pass',
+            'set_p_mlink' => 'wait_for_p_mlink'
+        ];
+        
+        $db_data['user_states'][$chat_id] = $state_map[$key];
+        $db_data['temp_data'][$chat_id] = ['p_idx' => $idx];
+        edit_message($chat_id, $msg_id, "📝 Send the new value for this setting:", ['inline_keyboard' => [[['text' => 'Cancel', 'callback_data' => "conf_pnl_$idx"]]]]);
+    }
+    
+    // ==========================================
+    // ওটিপি গ্রুপ ম্যানেজমেন্ট (নতুন যুক্তকৃত)
+    // ==========================================
+    elseif ($data === 'manage_otp_groups') {
+        edit_message($chat_id, $msg_id, "🛡 <b>OTP Group Management</b>", otp_groups_list_keyboard($settings));
+    }
+    elseif ($data === 'add_fw') {
+        $db_data['user_states'][$chat_id] = 'wait_for_add_fw_id';
+        edit_message($chat_id, $msg_id, "📝 Send Group ID or Username to forward updates:", ['inline_keyboard' => [[['text' => 'Cancel', 'callback_data' => 'manage_otp_groups']]]]);
+    }
+    elseif (str_starts_with($data, 'manage_fw_')) {
+        $idx = (int)str_replace('manage_fw_', '', $data);
+        edit_message($chat_id, $msg_id, "🛡 <b>Manage Group:</b> " . $settings['fw_groups'][$idx]['chat_id'], specific_fw_group_keyboard($settings, $idx));
+    }
+    elseif (str_starts_with($data, 'add_fwbtn_')) {
+        $idx = (int)str_replace('add_fwbtn_', '', $data);
+        $db_data['user_states'][$chat_id] = 'wait_for_add_fw_btn';
+        $db_data['temp_data'][$chat_id] = ['fw_idx' => $idx];
+        edit_message($chat_id, $msg_id, "📝 Send Custom Inline Button format:\n<code>Button Text - https://link.com</code>", ['inline_keyboard' => [[['text' => 'Cancel', 'callback_data' => "manage_fw_$idx"]]]]);
+    }
+    elseif (str_starts_with($data, 'del_fwbtn_')) {
+        $parts = explode('_', $data);
+        $idx = (int)$parts[2]; $b_idx = (int)$parts[3];
+        unset($settings['fw_groups'][$idx]['buttons'][$b_idx]);
+        $settings['fw_groups'][$idx]['buttons'] = array_values($settings['fw_groups'][$idx]['buttons']);
+        edit_message($chat_id, $msg_id, "🛡 <b>Manage Group:</b> " . $settings['fw_groups'][$idx]['chat_id'], specific_fw_group_keyboard($settings, $idx));
+    }
+    elseif (str_starts_with($data, 'del_fw_')) {
+        $idx = (int)str_replace('del_fw_', '', $data);
+        unset($settings['fw_groups'][$idx]);
+        $settings['fw_groups'] = array_values($settings['fw_groups']);
+        edit_message($chat_id, $msg_id, "🛡 <b>OTP Group Management</b>", otp_groups_list_keyboard($settings));
+    }
+    elseif ($data === 'edit_otp_link' || $data === 'edit_main_channel') {
+        $db_data['user_states'][$chat_id] = ($data === 'edit_otp_link') ? 'wait_for_otp_link' : 'wait_for_main_channel';
+        edit_message($chat_id, $msg_id, "📝 Send the new URL Link:", ['inline_keyboard' => [[['text' => 'Cancel', 'callback_data' => 'manage_otp_groups']]]]);
+    }
+    
+    // ==========================================
+    // মেনু ডিজাইন এবং অন্যান্য সেটিংস (নতুন যুক্তকৃত)
+    // ==========================================
+    elseif ($data === 'menu_design_list') {
+        edit_message($chat_id, $msg_id, "🎨 <b>Menu Design Editor</b>\nSelect a menu block to edit its body text:", menu_design_list_keyboard());
+    }
+    elseif (str_starts_with($data, 'md_edit_')) {
+        $key = str_replace('md_edit_', '', $data);
+        $db_data['user_states'][$chat_id] = 'wait_for_menu_text';
+        $db_data['temp_data'][$chat_id] = ['menu_key' => $key];
+        edit_message($chat_id, $msg_id, "🎨 <b>Editing: " . strtoupper($key) . "</b>\n\nSend the new HTML formatted text:", ['inline_keyboard' => [[['text' => 'Cancel', 'callback_data' => 'menu_design_list']]]]);
+    }
+    elseif ($data === 'md_reset_defaults') {
+        global $default_settings;
+        $settings['custom_messages'] = $default_settings['custom_messages'];
+        answer_callback($call['id'], "✅ Messages reset to defaults!", true);
+    }
+    
+    // লোকাল ফাইল ডিলিট
+    elseif ($data === 'delete_files') {
+        $kb = [];
+        foreach ($db_data['number_batches'] as $bid => $batch) {
+            $kb[] = [['text' => "Del: " . $batch['filename'] . " (" . count($batch['numbers']) . ")", 'callback_data' => "del_b_$bid"]];
+        }
+        $kb[] = [['text' => 'Back', 'callback_data' => 'back_to_admin']];
+        edit_message($chat_id, $msg_id, "🗑 Select a file to delete:", ['inline_keyboard' => $kb]);
+    }
+    elseif (str_starts_with($data, 'del_b_')) {
+        $bid = str_replace('del_b_', '', $data);
+        unset($db_data['number_batches'][$bid]);
+        answer_callback($call['id'], "✅ File deleted!", true);
+        
+        $kb = [];
+        foreach ($db_data['number_batches'] as $bid => $batch) {
+            $kb[] = [['text' => "Del: " . $batch['filename'] . " (" . count($batch['numbers']) . ")", 'callback_data' => "del_b_$bid"]];
+        }
+        $kb[] = [['text' => 'Back', 'callback_data' => 'back_to_admin']];
+        edit_message($chat_id, $msg_id, "🗑 Select a file to delete:", ['inline_keyboard' => $kb]);
     }
 }
